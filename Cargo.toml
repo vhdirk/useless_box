@@ -1,8 +1,8 @@
 [package]
-name = "blue-pill-quickstart"
+name = "useless-box"
 version = "0.1.0"
-authors = ["Guillaume Pinot <texitoi@texitoi.eu>"]
-edition = "2018"
+authors = ["Dirk Van Haerenborgh <vhdirk@gmail.com>"]
+edition = "2021"
 
 [dependencies]
 stm32f1xx-hal = { version = "0.5.2", features = ["rt", "stm32f103" ] }

@@ -1,0 +1,35 @@
+
+{
+    // Debug settings: https://github.com/WebFreak001/code-debug
+    "version": "0.2.0",
+    "configurations": [
+        {
+            //  Debug the STM32 Blue Pill program.
+            "name": "Debug",
+            "type": "cortex-debug",
+            "request": "launch",
+            "servertype": "openocd",
+
+            "cwd": "${workspaceRoot}",
+
+            //  This target setting is mandatory but redundant because it's specified in loader.gdb.
+            "executable": "./target/thumbv7m-none-eabi/debug/useless-box",
+            "preLaunchTask": "build",
+            "device": "STM32F103C8T6",
+            "configFiles": [
+                "openocd.cfg"
+            ],
+            "svdFile": "${workspaceRoot}/STM32F103.svd",
+            "runToMain": true,
+            "swoConfig": {
+                "enabled": true,
+                "cpuFrequency": 8000000,
+                "swoFrequency": 2000000,
+                "source": "probe",
+                "decoders": [
+                    { "type": "console", "label": "ITM", "port": 0 }
+                ]
+            }
+        }
+    ]
+}

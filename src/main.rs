@@ -41,6 +41,28 @@ fn main() -> ! {
             led.toggle().unwrap();
         }
     }
+
+    // let mut rcc = dp.RCC.constrain();
+
+    // let gpioa = device.GPIOA.split(&mut rcc);
+
+    // let cfg = serial::Config::default().baudrate(115_200.bps());
+
+    // let mut usart2 = dp
+    //     .USART2
+    //     .usart(gpioa.pa2, gpioa.pa3, cfg, &mut rcc)
+    //     .unwrap();
+
+    // let mut delay = dp.TIM15.delay(&mut rcc);
+
+    // loop {
+    //     writeln!(usart2, "Hello, World!").unwrap();
+    //     delay.delay(50.ms());
+    // }
+
+
+
+
 }
 
 #[exception]
