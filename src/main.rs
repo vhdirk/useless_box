@@ -5,11 +5,17 @@
 use panic_rtt_target as _;
 use rtic::app;
 use rtt_target::{rprintln, rtt_init_print};
-use stm32f1xx_hal::gpio::PinState;
-use stm32f1xx_hal::gpio::{gpioa::PA8, gpioc::PC13, Output, PushPull};
+use stm32f1::stm32f103::TIM3;
+use stm32f1xx_hal::gpio::{
+    gpioc::PC13, Edge, ExtiPin, Input, Output, PinState, PullDown, PushPull, PA3, PA4,
+};
+use stm32f1xx_hal::pac::TIM1;
 use stm32f1xx_hal::prelude::*;
-use stm32f1xx_hal::timer::Tim2NoRemap;
+use stm32f1xx_hal::time::MonoTimer;
+use stm32f1xx_hal::timer::{Delay, Tim1NoRemap, Tim2NoRemap, Timer};
 use systick_monotonic::{fugit::Duration, Systick};
+
+mod hc_sr04;
 
 // This needed some experimentation, only works for our wooden arm thing
 const MIN_DUTY_DIVIDER: u16 = 50;
@@ -25,36 +31,45 @@ fn get_duty_from_angle(
     min_duty + angle * ((max_duty - min_duty) / (max_angle - min_angle))
 }
 
-
 #[app(device = stm32f1xx_hal::pac, peripherals = true, dispatchers = [SPI1])]
 mod app {
-    use super::*;
+
+    use stm32f1::stm32f103::TIM5;
+use super::*;
+    use stm32f1::stm32f103::TIM2;
+    use stm32f1xx_hal::rcc::Clocks;
+    use stm32f1xx_hal::timer::CounterHz;
+    use stm32f1xx_hal::timer::FTimer;
+
+    #[monotonic(binds = SysTick, default = true)]
+    type MonoTimer = Systick<1000>;
+
 
     #[shared]
-    struct Shared {}
+    struct Shared {
+        distance: u32,
+        clocks: Clocks,
+    }
 
     #[local]
     struct Local {
         led: PC13<Output<PushPull>>,
         led_state: bool,
-        trigger: PA8<Output<PushPull>>,
-        trigger_state: bool
-        // servo0:
+        sensor: hc_sr04::HcSr04<PA4<Output<PushPull>>, TIM1, 1_000_000>,
+        echo: PA3<Input<PullDown>>,
+        instant: <MonoTimer as rtic::Monotonic>::Instant
     }
-
-    // #[monotonic(binds = SysTick, default = true)]
-    // type MonoTimer = Systick<1000>;
 
     #[init]
     fn init(ctx: init::Context) -> (Shared, Local, init::Monotonics) {
+        rtt_init_print!();
+        rprintln!("init");
+
         // Setup clocks
         let mut flash = ctx.device.FLASH.constrain();
         let rcc = ctx.device.RCC.constrain();
 
         let mono = Systick::new(ctx.core.SYST, 36_000_000);
-
-        rtt_init_print!();
-        rprintln!("init");
 
         let clocks = rcc
             .cfgr
@@ -73,10 +88,17 @@ mod app {
 
         // let delay = Delay::new(p.core.SYST, clocks);
         let trigger = gpioa
-            .pa8
-            .into_push_pull_output_with_state(&mut gpioa.crh, PinState::Low);
+            .pa4
+            .into_push_pull_output_with_state(&mut gpioa.crl, PinState::Low);
 
         let mut afio = ctx.device.AFIO.constrain();
+
+        let mut echo = gpioa.pa3.into_pull_down_input(&mut gpioa.crl);
+
+        // Setup interrupt on Pin PA15
+        echo.make_interrupt_source(&mut afio);
+        echo.trigger_on_edge(&ctx.device.EXTI, Edge::RisingFalling);
+        echo.enable_interrupt(&ctx.device.EXTI);
 
         // We're using Timer 2 which uses the GPIOA pins
         // PA0, PA1, PA2, and PA3 (labeled A0, A1 etc. on the blue-pill)
@@ -105,55 +127,138 @@ mod app {
         // let max_duty = 20;
         // This is to give it some time to move
 
+        let mut delay = ctx.device.TIM1.delay(&clocks);
 
-        let mut delay = ctx.core.SYST.delay(&clocks);
+        // let timer = Timer::new(ctx.device.TIM3, &clocks);
 
         // Spins the two servos in opposite directions
         // 10 degrees at a time, 5 times
-        for _ in 0..5 {
-            for angle in (0..181).step_by(10) {
-                delay.delay_ms(100u16);
-                let duty0 = get_duty_from_angle(angle, min_duty, max_duty, 0, 180);
-                servo0.set_duty(duty0);
+        // for _ in 0..5 {
+        //     for angle in (0..181).step_by(10) {
+        //         delay.delay_ms(100u16);
+        //         let duty0 = get_duty_from_angle(angle, min_duty, max_duty, 0, 180);
+        //         servo0.set_duty(duty0);
 
-                let duty1 = get_duty_from_angle(180 - angle, min_duty, max_duty, 0, 180);
-                servo1.set_duty(duty1);
-                delay.delay_ms(100u16);
-            }
-        }
-        servo0.set_duty(0);
-        servo1.set_duty(0);
+        //         let duty1 = get_duty_from_angle(180 - angle, min_duty, max_duty, 0, 180);
+        //         servo1.set_duty(duty1);
+        //         delay.delay_ms(100u16);
+        //     }
+        // }
+        // servo0.set_duty(0);
+        // servo1.set_duty(0);
+
+        // delay.delay(400.micros());
+
+        let mut sensor = hc_sr04::HcSr04::new(trigger, delay).unwrap();
+        sensor.trigger();
+
 
         // Schedule the blinking task
         blink::spawn_after(Duration::<u64, 1, 1000>::from_ticks(1000)).unwrap();
+        // main::spawn().unwrap();
 
         (
-            Shared {},
+            Shared {
+                clocks,
+                distance: 0,
+            },
             Local {
                 led,
                 led_state: false,
-                trigger,
-                trigger_state: false,
+                sensor,
+                echo,
+                instant: monotonics::MonoTimer::now(),
             },
             init::Monotonics(mono),
         )
     }
 
-    // #[task(local = [led, led_state])]
-    // fn blink(ctx: blink::Context) {
-    //     rprintln!("blink");
-    //     if *ctx.local.led_state {
-    //         ctx.local.led.set_high();
-    //         *ctx.local.led_state = false;
+    #[task(local = [led, led_state, echo, instant, sensor], shared = [clocks, distance])]
+    fn blink(ctx: blink::Context) {
+        rprintln!("blink");
+        if *ctx.local.led_state {
+            ctx.local.led.set_high();
+            *ctx.local.led_state = false;
+        } else {
+            ctx.local.led.set_low();
+            *ctx.local.led_state = true;
+        }
+
+        let trig = ctx.local.sensor.trigger();
+
+        blink::spawn_after(Duration::<u64, 1, 1000>::from_ticks(1000)).unwrap();
+    }
+
+    #[idle()]
+    fn idle(ctx: idle::Context) -> ! {
+        let mut i = 0;
+        loop {
+            cortex_m::asm::nop();
+
+            let now = monotonics::MonoTimer::now();
+
+            rprintln!("main_loop, {}", now);
+
+            i += 1;
+
+        }
+    }
+
+    // #[task(shared = [distance])]
+    // fn main(mut ctx: main::Context) {
+    //     rprintln!("main_loop");
+    //     (ctx.shared.distance).lock(|distance| {
+    //         rprintln!("Current distance: {}", distance);
+    //     });
+
+    //     main::spawn().unwrap();
+    // }
+
+    // #[task(priority = 2, binds = EXTI3, local = [echo, instant, sensor], shared = [clocks, distance])]
+    // fn measure_distance(mut ctx: measure_distance::Context) {
+    //     ctx.local.echo.clear_interrupt_pending_bit();
+
+    //     rprintln!("measure_distance");
+    //     let now = monotonics::MonoTimer::now();
+
+    //     let high = ctx.local.echo.is_high();
+    //     let low = ctx.local.echo.is_low();
+
+    //     if ctx.local.echo.is_high() {
+    //         // Echo pin is high. Start the timer
+    //         *ctx.local.instant = now;
+    //         // ctx.local.time_counter.start(1000.Hz());
+    //         // (ctx.shared.clocks, ctx.shared.sensor).lock(|clocks, sensor| {
+    //         //     // sensor.start_measurement(clocks);
+
+    //         //     // let mut time_counter = ctx.local.time_counter;
+    //         // });
+    //                 rprintln!("measure_distance");
+
     //     } else {
-    //         ctx.local.led.set_low();
-    //         *ctx.local.led_state = true;
+    //         let elapsed = now - *ctx.local.instant;
+    //         rprintln!("measure_distance");
+
+
+    //         let trig = ctx.local.sensor.trigger();
+
+    //         let okee = trig.is_ok();
+    //         let me = 0;
+    //         // // Echo pin low. Stop the timer and retrigger
+    //         // (ctx.shared.clocks, ctx.shared.distance).lock(
+    //         //     |clocks, distance| {
+    //         //         // *distance = sensor.end_measurement(clocks).map(|d| d.mm()).unwrap_or(100);
+
+
+    //         //     },
+    //         // );
     //     }
-    //     blink::spawn_after(Duration::<u64, 1, 1000>::from_ticks(1000)).unwrap();
+
+
+
+
     // }
 }
-
-
 
 // #[entry]
 // fn main() -> ! {
