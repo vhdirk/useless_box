@@ -1,26 +1,31 @@
 #-------------------------------------------------------------------------------
 # blue pill STM32
 #-------------------------------------------------------------------------------
-[target.thumbv7m-none-eabi]
-# uncomment ONE of these three option to make `cargo run` start a GDB session
-# which option to pick depends on your system
-# runner = "arm-none-eabi-gdb -q -x openocd.gdb"
-runner = "gdb-multiarch -q -x openocd.gdb"
-# runner = "gdb -q -x openocd.gdb"
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+runner = "probe-run --chip STM32F103C8"
 
-rustflags = ["-C", "link-arg=-Tlink.x"]
+rustflags = [
+  "-C", "linker=flip-link",
+  "-C", "link-arg=-Tlink.x",
+  "-C", "link-arg=-Tdefmt.x",
+  # This is needed if your flash or ram addresses are not aligned to 0x10000 in memory.x
+  # See https://github.com/rust-embedded/cortex-m-quickstart/pull/95
+  "-C", "link-arg=--nmagic",
+]
 
 [build]
 target = "thumbv7m-none-eabi"
 
-#-------------------------------------------------------------------------------
-# Arduino nano every
-#-------------------------------------------------------------------------------
-# [build]
-# target = "avr-atmega328p.json"
+# #-------------------------------------------------------------------------------
+# # Arduino nano every
+# #-------------------------------------------------------------------------------
+# # [build]
+# # target = "avr-atmega328p.json"
 
-# [unstable]
-# build-std = ["core"]
+# # [unstable]
+# # build-std = ["core"]
 
-# [target.'cfg(target_arch = "avr")']
-# runner = "./uno-runner.sh"
+# # [target.'cfg(target_arch = "avr")']
+# # runner = "./uno-runner.sh"
+
+
